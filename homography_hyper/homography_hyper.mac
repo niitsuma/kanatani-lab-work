@@ -1,0 +1,219 @@
+load(eigen);
+load(linearalgebra);
+load(lapack);
+load(distrib);
+
+
+matrix2list(m):=substpart("[",m,0);
+rowmatrix2list(m):=matrix2list(m)[1];
+colmatrix2list(m):=rowmatrix2list(transpose(m));
+norm2list(v):=list:xreduce("+",v^2);
+
+
+
+sorted_eig_vec_pair(m):=block(local(lvec,vmat,umat,eiglist),
+  /*mode_declare(completearray(lvec[length(m)] ),float),*/
+  [lvec,vmat,umat]:dgeev(m,true,false),
+  eiglist:makelist([lvec[i],col(vmat,i)],i,1,length(lvec)),
+  return(sort(eiglist,lambda([x,y],x[1]<y[1]))));
+
+
+min_eig_vec(m):=sorted_eig_vec_pair(m)[1][2];
+diaggenmatrix(lst ):=genmatrix(lambda([k,l],if k=l then lst[k] else 0),length(lst),length(lst));
+invlvec(lvec,minv):=makelist(if abs(lvec[k]) < minv then 1/abs(minv)  else 1/lvec[k],k,1,length(lvec));
+eigvenzero(lvec,minv):=makelist(if abs(lvec[k]) < minv then abs(lvec[k]) else lvec[k],k,1,length(lvec));
+
+geigeig(m,n):=block([cn,icn,mm,lvec,vmat,umat,vvmat],
+  [lvec,vmat,umat]:dgeev(n,true,false),
+  lvec:eigvenzero(lvec,1e-4),
+  icn:diaggenmatrix(sqrt(invlvec(lvec,1e-4))).transpose(vmat),  
+  mm:icn.m.transpose(icn),
+  [lvec,vmat,umat]:dgeev(mm,true,false),
+  vvmat:transpose(icn).vmat,
+  [lvec,vvmat,false]
+  );
+
+
+
+geig(m,n):=geigeig(m,n);
+
+
+
+eig_vec_pair_list_from_l_v(lvec,vmat,umat_dummy):=makelist([lvec[i],col(vmat,i)],i,1,length(lvec));
+
+sorted_eig_vec_pair_from_l_v(lvec,vmat,umat_dummy):=sort(eig_vec_pair_list_from_l_v(lvec,vmat,false),lambda([x,y],x[1]<y[1]));
+sorted_abs_eig_vec_pair_from_l_v(lvec,vmat,umat_dummy):=sort(eig_vec_pair_list_from_l_v(lvec,vmat,false),lambda([x,y],abs(x[1])<abs(y[1])));
+
+max_abs_geig_vec(m,n):=block([ml:apply(sorted_eig_vec_pair_from_l_v, geig(m,n)),l],l:length(ml),ml[l][2]);
+
+min_abs_geig_vec(m,n):=block([ml:apply(sorted_eig_vec_pair_from_l_v, geig(m,n)),l],l:length(ml),ml[1][2]);
+
+
+loadfile("scoeffx1hx0mat.max");
+xefn(x0v,y0v,x1v,y1v):=sublis([sx0=x0v,sy0=y0v,sx1=x1v,sy1=y1v,sf0=600],''scoeffx1hx0mat);
+
+
+
+h_solv_ls(g0,g1,f0):=block([a,m_mat:0,m_mat_a,xy0,xy1],
+  for a thru length(g0) do(
+    a,
+    xy0:g0[a],
+    xy1:g1[a],
+    xe:xefn(xy0[1],xy0[2],xy1[1],xy1[2]),
+    m_mat_a:xe.transpose(xe),
+    m_mat:m_mat+m_mat_a
+    ),
+  m_mat:m_mat/length(g0),
+  return(colmatrix2list(min_eig_vec(m_mat)))
+  );
+
+
+loadfile("vmatlist.max");
+vmatijxy(ii,jj,x0v,y0v,x1v,y1v):=sublis([sx0=x0v,sy0=y0v,sx1=x1v,sy1=y1v,sf0=600],''vmatlist[ii][jj]);
+
+
+
+h_solv_fns_with_init_u(u_init,g0,g1,f0):=block(
+  local(u,m_l_mat,m_mat,l_mat,xy0,xy1,w_mat_inv,lvec,vmat,umat,eiglist,w_mat2,xe,v_vec,m_mat_a,l_mat_a,upre,err_u,n_iter),
+  u:u_init,
+  for i_loop thru 100 do(
+    upre:u,
+    m_l_mat:genmatrix(lambda([i,j],0),9,9),
+    for a thru length(g0) do(  
+      xy0:g0[a],xy1:g1[a],
+      w_mat_inv:float(genmatrix( lambda([i,j], u.vmatijxy(i,j,xy0[1],xy0[2],xy1[1],xy1[2]).u),3,3)),
+      [lvec,vmat,umat]:dgeev(w_mat_inv,true,false),
+      eiglist:makelist([lvec[i],col(vmat,i)],i,1,3 ),
+      eiglist:sort(eiglist,lambda([x,y],x[1]<y[1] )),    
+      w_mat2:eiglist[3][2].transpose(eiglist[3][2])/eiglist[3][1]+eiglist[2][2].transpose(eiglist[2][2])/eiglist[2][1],
+      xe:xefn(xy0[1],xy0[2],xy1[1],xy1[2]),
+      v_vec:w_mat2.transpose(xe).u,
+      m_mat_a:xe.w_mat2.transpose(xe),
+      l_mat_a:apply("+",makelist(apply("+",makelist(v_vec[k][1]*v_vec[l][1]*vmatijxy(k,l,xy0[1],xy0[2],xy1[1],xy1[2]),l,1,3)),k,1,3)),
+      m_l_mat:m_l_mat+m_mat_a-l_mat_a
+      /*,m_mat:m_mat+m_mat_a,
+      l_mat:l_mat+l_mat_a*/
+      ),
+    m_l_mat:m_l_mat/length(g0),
+    /*
+    m_mat:m_mat/length(g0),
+    l_mat:l_mat/length(g0)
+    ,
+    disp(m_mat-m_mat_cal(u,g0,g1,f0)),
+    */
+    /*disp(m_mat-l_mat-m_l_mat),*/
+    [lvec,vmat,umat]:dgeev(m_l_mat,true,false),
+    eiglist:makelist([lvec[i],col(vmat,i)],i,1,9 ),
+    eiglist:sort(eiglist,lambda([x,y],x[1]<y[1] ) ),
+    u:args(transpose(eiglist[1][2] ))[1],u:u*(u[1]/abs(u[1])),    
+    err_u:(norm2list(u-upre)),
+    if  err_u<1e-20 then (
+      n_iter:i_loop,
+      u:append(u,[n_iter]),      
+      return(u)),
+    n_iter:i_loop
+    ),/*i_loop end*/
+  if  err_u>1e-20 then (disp(u),disp("fns not  conv"),u:[-1]),return(u));
+
+
+
+h_solv_fns_init_ls(g0,g1,f0):=h_solv_fns_with_init_u(h_solv_ls(g0,g1,f0),g0,g1,f0);
+
+
+h_solv_taubin(g0,g1,f0):=block([a,xe,m_mat_ls:0,n_mat_tb:0,na:length(g0),u],
+  for a thru length(g0) do(
+    xy0:g0[a],
+    xy1:g1[a],
+    xe:xefn(xy0[1],xy0[2],xy1[1],xy1[2]),
+    m_mat_ls:m_mat_ls+sum(col(xe,k).transpose( col(xe,k)),k,1,3),
+    n_mat_tb:n_mat_tb+sum(vmatijxy(k,k,xy0[1],xy0[2],xy1[1],xy1[2]),k,1,3)
+    ),
+  m_mat_ls:m_mat_ls/na,
+  n_mat_tb:apply(matrix,n_mat_tb/na),
+  /*u:min_abs_geig_vec(m_mat_ls,n_mat_tb),*/
+  u:max_abs_geig_vec(n_mat_tb,m_mat_ls),
+  u:float(uvect(colmatrix2list(u))),
+  if( sign(u[9])=neg) then return(-u) else return(u)
+);
+
+
+col_vector_cross_product(u,v):=block(
+  local(ret,retret),
+  retret:[],
+  for l:1 thru length(u) do (
+    ret:[],
+    for k:1 thru length(v) do(
+      ret:append(ret,[u[l][1]*v[k][1]])
+      ),
+    retret:append(retret,[ret])
+    ),return(retret));
+
+mat_inv_gt_eig_min(m):=block([es,nes,mi],
+  es:sorted_eig_vec_pair(m),
+  nes:length(es),
+  mi:sum(col_vector_cross_product(es[i][2],es[i][2])/es[i][1],i,2,nes ),
+  return(mi)
+  );
+
+mymattrace(m):=sum(m[i][i], i,1,length(m) );
+
+mat_en_sym(m):=(transpose(m)+m)/2;
+
+h_solv_hyper_sub(g0,g1,f0):=block([a,xe,m_mat_ls:0,n_mat_tb:0,na:length(g0),u],
+  for a thru na do(
+    xy0:g0[a],
+    xy1:g1[a],
+    xe:xefn(xy0[1],xy0[2],xy1[1],xy1[2]),
+    m_mat_ls:m_mat_ls+sum(col(xe,k).transpose( col(xe,k)),k,1,3),
+    n_mat_tb:n_mat_tb+sum(vmatijxy(k,k,xy0[1],xy0[2],xy1[1],xy1[2]),k,1,3)
+    ),
+  m_mat_ls:m_mat_ls/na,
+  n_mat_tb:n_mat_tb/na,
+  n_mat_sp:  apply(matrix,n_mat_tb)
+  -
+  sum(
+    sum(
+      lambda([a,k],   
+        l:k,
+        xy0:g0[a],
+        xy1:g1[a],
+        xe:xefn(xy0[1],xy0[2],xy1[1],xy1[2]),
+        mi8:apply(matrix,mat_inv_gt_eig_min(m_mat_ls)),
+        vmkl:apply(matrix,vmatijxy(k,l,xy0[1],xy0[2],xy1[1],xy1[2])),
+        xxekl:apply(matrix,col_vector_cross_product(col(xe,k),col(xe,l))),   
+        mymattrace(mi8. vmkl)*xxekl
+        +
+        ( col(xe,k). mi8. col(xe,l)) * vmkl
+        +
+        2 * mat_en_sym(vmkl . mi8 . xxekl)
+        )(a,k)/(na*na),k,1,3),a,1,na),
+    /*
+    m:invert(n_mat_sp).m_mat_ls,
+    u:min_abs_eig_vec(m),
+    */
+    /*u:min_abs_geig_vec(m_mat_ls,n_mat_sp),*/
+    u:max_abs_geig_vec(n_mat_sp,m_mat_ls),
+    u:float(uvect(colmatrix2list(u))),
+    /*
+    m:invert(m_mat_ls).n_mat_sp,
+    u:max_abs_eig_vec(m),*/
+    if( sign(u[9])=neg) then return(-u) else return(u)
+    /*
+    if( sign(u[9][1])=neg) then return([colmatrix2list(-u),m_mat_ls,n_mat_sp]) else return([colmatrix2list(u),m_mat_ls,n_mat_sp]) */
+);
+
+
+h_solv_hyper(g0,g1,f0):=h_solv_hyper_sub(g0,g1,f0);
+
+
+grid2d0:read_nested_list("plannergrideij0.dat");
+grid2d1:read_nested_list("plannergrideij1.dat");
+f0:600;
+
+h_solv_ls(grid2d0,grid2d1,f0);
+
+h_solv_fns_init_ls(grid2d0,grid2d1,f0);
+
+h_solv_taubin(grid2d0,grid2d1,f0);
+
+h_solv_hyper(grid2d0,grid2d1,f0);
